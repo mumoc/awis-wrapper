@@ -21,47 +21,47 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #++
 
-# require "cgi"
+require "cgi"
 require "base64"
-# require "openssl"
-# require "digest/sha1"
-# require "uri"
-# require "net/https"
-# require "time"
+require "openssl"
+require "digest/sha1"
+require "uri"
+require "net/https"
+require "time"
 require "nokogiri"
-# require "extlib"
+require "rack"
 
 module Amazon
-  
+
   class RequestError < StandardError; end
-  
+
   class Awis
-        
+
     NAMESPACE = {:aws => "http://awis.amazonaws.com/doc/2005-07-11"}
     AWIS_DOMAIN = 'awis.amazonaws.com'
-    
+
     @@options = {
     	    :action => "UrlInfo",
     	    :responsegroup => "Rank"
     }
-    
+
     @@debug = false
 
     # Default service options
     def self.options
     	    @@options
     end
-    
+
     # Set default service options
     def self.options=(opts)
     	    @@options = opts
     end
-    
+
     # Get debug flag.
     def self.debug
     	    @@debug
     end
-    
+
     # Set debug flag to true or false.
     def self.debug=(dbg)
     	    @@debug = dbg
@@ -72,13 +72,13 @@ module Amazon
       str.split('_').map{|e| e.capitalize}.join
       # str.split('_').each_with_index.map { |v,i| v.capitalize }.join
     end
-    
+
     def self.configure(&proc)
     	    raise ArgumentError, "Block is required." unless block_given?
     	    yield @@options
     end
-    
-    def self.get_info(domain)    
+
+    def self.get_info(domain)
     	    url = self.prepare_url(domain)
     	    log "Request URL: #{url}"
     	    res = Net::HTTP.get_response(url)
@@ -87,8 +87,8 @@ module Amazon
     	    end
     	    log "Response text: #{res.body}"
     	    Response.new(res.body)
-    end	 
-    
+    end
+
     def self.get_batch_info(domains)
 	    url = self.batch_urls(domains)
       log "Request URL: #{url}"
@@ -99,8 +99,8 @@ module Amazon
       log "Response text: #{res.body}"
 	    Response.new(res.body)
     end
-       
-	        
+
+
     # Response object returned after a REST call to Amazon service.
     class Response
       # XML input is in string format
@@ -111,50 +111,50 @@ module Amazon
 
       def doc
         @doc
-      end      
-      
+      end
+
       def xpath(path)
         @doc.xpath(path, @namesapce)
       end
-      
+
       def get(tag)
         Element.new @doc.at_xpath("//aws:#{Amazon::Awis.camel_case tag}", @namespace)
       end
-      
+
       def get_all(tag)
         @doc.xpath("//aws:#{Amazon::Awis.camel_case tag}", @namespace).collect{|data|Element.new data}
       end
-      
+
       # Return error code
       def error
         @doc.at_xpath("//aws:StatusMessage").content
       end
-      
+
       # Return error message.
       def success?
-      	(@doc.at_xpath "//aws:StatusCode").content == "Success"     	      	      
+      	(@doc.at_xpath "//aws:StatusCode").content == "Success"
       end
-      
+
       #returns inner html of any tag in awis response i.e resp.rank => 3
       def method_missing(methodId)
         puts methodId
-        @doc.send methodId 
-      end	                  
-            
+        @doc.send methodId
+      end
+
     end
-    
+
     class Element
       def initialize(arg)
         @node = arg
       end
-      
+
       def [](key)
         @node[key.to_s]
       end
-      
+
       def get_all_child(str)
         result = @node.xpath(".//aws:#{Amazon::Awis.camel_case str.to_s}", Awis::NAMESPACE)
-        if result 
+        if result
             result.collect do |r|
               Element.new r
             end
@@ -162,10 +162,10 @@ module Amazon
           result
         end
       end
-      
+
       def method_missing(methodId)
         result = @node.xpath("./aws:#{Amazon::Awis.camel_case methodId.to_s}", Awis::NAMESPACE)
-        if result 
+        if result
             result.collect do |r|
               Element.new r
             end
@@ -173,16 +173,16 @@ module Amazon
           result
         end
       end
-      
+
       def to_s
         @node.content
       end
-      
-      
+
+
     end
-    
-    protected
-    
+
+
+
     def self.log(s)
     	    return unless self.debug
     	    if defined? RAILS_DEFAULT_LOGGER
@@ -193,14 +193,14 @@ module Amazon
     	    	    puts s
     	    end
     end
-      
-    private 
-    
+
+
+
     # Converts a hash into a query string (e.g. {a => 1, b => 2} becomes "a=1&b=2")
     def self.escape_query(query)
-      query.sort.map{|k,v| k + "=" + URI.escape(v.to_s, /[^A-Za-z0-9\-_.~]/)}.join('&')
+      Rack::Utils.build_query(query)
     end
-    
+
     def self.prepare_url(domain)
       query = {
         'AWSAccessKeyId'   => self.options[:aws_access_key_id],
@@ -212,19 +212,20 @@ module Amazon
         'Url'              => domain
       }
       awis_domain = Amazon::Awis::AWIS_DOMAIN
-      URI.parse("http://#{awis_domain}/?" + escape_query(query.merge({ 
+      URI.parse("http://#{awis_domain}/?" + escape_query(query.merge({
         'Signature' => Base64.encode64(
           OpenSSL::HMAC.digest(
-            'sha1', self.options[:aws_secret_key], 
+            'sha1',
+            self.options[:aws_secret_key],
             "GET\n#{awis_domain}\n/\n" + escape_query(query).strip)).chomp
       })))
     end
-    
+
     def self.batch_urls(urls)
       raise Amazon::RequestError, "Awis batch request cannot be > 5" unless urls.length < 6
 
       # timestamp = ( Time::now ).utc.strftime("%Y-%m-%dT%H:%M:%S.000Z")
-      awis_domain = Amazon::Awis::AWIS_DOMAIN  
+      awis_domain = Amazon::Awis::AWIS_DOMAIN
 
       batch_query = {
         "Action"                          => self.options[:action],
@@ -234,19 +235,20 @@ module Amazon
         "SignatureVersion"                => 2,
         "SignatureMethod"                 => "HmacSHA1"
       }
-  
+
       urls.each_with_index do |url,i|
         batch_query["#{self.options[:action]}.#{i+1}.Url"] = url
       end
-      signature = Base64.encode64( OpenSSL::HMAC.digest( OpenSSL::Digest.new( "sha1" ), 
+      signature = Base64.encode64( OpenSSL::HMAC.digest( OpenSSL::Digest.new( "sha1" ),
         self.options[:aws_secret_key], "GET\n#{awis_domain}\n/\n" + escape_query(batch_query))).strip
       query_str = batch_query.merge({'Signature' => signature})
       url = "http://#{awis_domain}/?#{escape_query(query_str)}"
       URI.parse url
   end
-    
+
   end
 
-  
+
 
 end
+
